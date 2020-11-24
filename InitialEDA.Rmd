@@ -1,0 +1,92 @@
+---
+title: "Initial EDA"
+author: "Emma Godfrey"
+date: "11/22/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(devtools)
+library(httpuv)
+library(twitteR)
+library(tidyverse)
+library(tidytext)
+library(rtweet)
+library("quanteda")
+library("stopwords")
+library("tm")
+library("wordcloud")
+library("SnowballC")
+library("RColorBrewer")
+library("RCurl")
+library("XML")
+library("textdata")
+library("udpipe")
+library("lattice")
+```
+```{r}
+
+token <- setup_twitter_oauth(
+  consumer_key = "BiJOj8WjsMpy4gWstvt3M5Xgj", 
+  consumer_secret = "4YnjjUETDZf7LZZccUef8WIUr5e1s9MqnCkb2rTo9Mjz4yYXVO",
+  access_token = "1330648074885107712-zysJcaWh6dNvFW29LI4rlL3ODcShyH",
+  access_secret = "QI4ABwszLDZgmNWyVeTUuRdPiXiHPZyKfCi2xAqIOmq60"
+)
+
+tw = searchTwitter('#KamalaHarris', n = 1e4, since = '2019-11-08', retryOnRateLimit = 1e4)
+d = twListToDF(tw)
+
+
+# clean data
+# change all text to lower case
+d$text <- tolower(d$text)
+# delete usernames
+d$text <- gsub("@\\w+", "", d$text)
+# delete punctuation
+d$text <- gsub("[[:punct:]]", "", d$text)
+# remove links 
+d$text <- gsub("http\\w+", "", d$text)
+
+# tokenize tweets
+tweet_words <- d %>% select(id, text) %>% unnest_tokens(word,text)
+
+tweet_words %>% count(word, sort = T) %>% slice(1:20) %>% 
+  ggplot(aes(x=reorder(word, n, function(n) -n), y=n)) + geom_bar(stat="identity") +theme(axis.text.x = element_text(angle = 60, hjust = 1)) + xlab("") 
+
+my_stop_words <- stop_words %>% select(-lexicon) %>% bind_rows(data.frame(word = c(stopwords(), "kamalaharris","https","t.co","rt", "joebiden", "biden", "kamala", "harris", "a", "the", "to", "and", "in", "you", "of", "is", "i","de", "tweet", "que", "diner", "via","level", "today", "joe", "les", "kamalaharrisvp", "video", "usa", "per", "las", "dinner", "voting", "come", "said", "one", "tonight")))
+
+tweet_words_intereting <- tweet_words %>% anti_join(my_stop_words)
+
+#model <- udpipe_download_model(language = "english")
+
+udmodel_english <- udpipe_load_model(file = '/Users/emmagodfrey/GitRepos/airbnbNY/english-ewt-ud-2.5-191206.udpipe')
+s <- udpipe_annotate(udmodel_english, tweet_words_intereting$word)
+df <- data.frame(s)
+
+stats <- subset(df, upos %in% c("ADJ"))
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Most occurring adjectives", xlab = "Freq")
+clean.adj <- stats %>% 
+  filter(!(key %in% c("reagan","joebidenpresidentelect", "ead", "ue", "est")))
+
+barchart(key ~ freq, data = head(clean.adj, 30), col = "cadetblue", 
+         main = "Most occurring adjectives", xlab = "Freq")
+
+
+bing_lex <- get_sentiments("nrc")
+clean.adj$key <- as.character(clean.adj$key)
+sent.adj <- inner_join(clean.adj,bing_lex, by=c("key"= "word"))
+
+sent.adj %>% group_by(sentiment) %>% count(n=n()) %>% arrange(desc(n))
+```
+
+
+```{r}
+tw.obama = searchTwitter('#BarackObama', n = 1e4, since = '2019-11-08', retryOnRateLimit = 1e4)
+d.obama = twListToDF(tw.obama)
+
+```
+
