@@ -1,0 +1,250 @@
+---
+title: "rtweet"
+author: "Emma Godfrey"
+date: "11/24/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tm")
+library("SnowballC")
+library("wordcloud")
+library("RColorBrewer")
+library("devtools")
+library("twitteR")
+library("tidyverse")
+library("tidytext")
+library("quanteda")
+library("stopwords")
+library("RCurl")
+library("XML")
+library("textdata")
+library("udpipe")
+library("lattice")
+library("ggpubr")
+library("remotes")
+library("rtweet")
+library("httpuv")
+```
+
+```{r}
+kamala <- search_tweets("kamalaharris", n = 10, include_rts = FALSE)
+user.info <- lookup_users(unique(kamala$user_id))
+
+discard(user.info$location, `==`, "") %>% 
+  str_match(sprintf("(%s)", paste0(state.abb, collapse="|"))) %>%
+  .[,2] %>%
+  discard(is.na) %>% 
+  table() %>% 
+  tidy() %>% 
+  set_names(c("state","n"))%>% 
+  left_join(
+    as_data_frame(maps::state.carto.center) %>% # join state cartographic center data
+    mutate(state=state.abb)
+  ) %>% 
+  # the GitHub-only cartogram package nas a data structure which holds state adjacency information
+  # by specifying that here, it will help make the force-directed cartogram circle positioning more precise (and pretty)
+  filter(state %in% names(cartogram::statenbrs)) -> for_dor
+kamala.clean <- kamala %>% 
+  filter(is_quote == FALSE, 
+         lang == "en")
+
+kamala <- lat_lng(kamala)
+
+## plot state boundaries
+par(mar = c(0, 0, 0, 0))
+maps::map("state", lwd = .25)
+
+## plot lat and lng points onto state map
+with(kamala, points(lng, lat, pch = 20, cex = .75, col = rgb(0, .3, .7, .75)))
+```
+
+
+```{r}
+
+users <- c("DonaldTrump")
+trump <- lookup_users(users)
+trump
+news.fox <- get_timeline("foxnews", n=5000)
+news.cnn <- get_timeline("cnn", n=5000)
+news <- rbind(news.fox, news.cnn)
+
+news %>%
+  filter(created_at > "2020-1-01") %>%
+  group_by(screen_name) %>%
+  ts_plot("days") +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    plot.title = ggplot2::element_text(face = "bold")) +
+  labs(
+    x = NULL, y = NULL,
+    title = "Frequency of Twitter statuses posted by news organization",
+    subtitle = "Twitter status (tweet) counts aggregated by day from October/November 2017",
+    caption = "\nSource: Data collected from Twitter's REST API via rtweet"
+  )
+
+news$text <- tolower(news$text)
+# delete usernames
+news$text <- gsub("@\\w+", "", news$text)
+# delete punctuation
+news$text <- gsub("[[:punct:]]", "", news$text)
+# remove links 
+news$text <- gsub("http\\w+", "", news$text)
+library("tokenizers")
+library("purrr")
+news.words <- news %>% select(user_id, text, screen_name) %>% unnest_tokens(word,text)
+
+stop <- stop_words %>% select(-lexicon) %>% bind_rows(data.frame(word = c(stopwords(),"joe","biden","trump","presidentelect", "writes","donald", "trumps","bidens","president", "cnnelection","cnn","heres","presidential", "campaigns", "fox", "news")))
+
+news.words.interesting <- news.words %>% anti_join(stop)
+
+news.words.interesting %>% filter(screen_name == "FoxNews") %>% count(word, sort = T) %>% slice(1:20) %>% ggplot(aes(x=reorder(word, n, function(n) -n), y=n)) + geom_bar(stat="identity") +theme(axis.text.x = element_text(angle = 60, hjust = 1)) + xlab("")
+```
+
+```{r cnn wordcloud}
+news.words.cnn.intersting <- news.words.interesting %>% filter(screen_name=="CNN")
+corp.cnn <- Corpus(VectorSource(news.words.cnn.intersting$word))
+inspect(corp.cnn)
+
+tdm.cnn <- TermDocumentMatrix(corp.cnn)
+
+m <- as.matrix(tdm.cnn)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word=names(v),freq=v)
+head(d, 10)
+
+set.seed(1234)
+wordcloud(words = d$word, freq = d$freq, min.freq = 50,
+          max.words=200, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+
+```
+
+```{r foxnews word cloud}
+news.words.fox.intersting <- news.words.interesting %>% filter(screen_name=="FoxNews")
+corp.fox <- Corpus(VectorSource(news.words.fox.intersting$word))
+
+tdm.fox <- TermDocumentMatrix(corp.fox)
+
+m.fox <- as.matrix(tdm.fox)
+v.fox <- sort(rowSums(m.fox),decreasing=TRUE)
+d.fox <- data.frame(word=names(v.fox),freq=v.fox)
+head(d.fox, 10)
+
+set.seed(1234)
+wordcloud(words = d.fox$word, freq = d.fox$freq, min.freq = 20,
+          max.words=200, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+
+```
+```{r}
+library("text2vec")
+library("sentimentr")
+sentences <- news %>%
+  select(user_id,text, screen_name)%>%
+  get_sentences(text)  
+
+sentiment.sentences <- sentences %>% sentiment()
+
+sentiment.sentences %>% 
+  ggplot(mapping=aes(x=sentiment,fill=screen_name)) +
+  geom_histogram(bins =100, color="#e9ecef", alpha=0.5,position = 'identity') +
+    scale_fill_manual(values=c("#69b3a2", "#404080")) +
+    theme_minimal() +
+    labs(fill="")
+
+```
+```{r}
+trump2020 <- search_tweets("#Trump2020", n=10000, include_rts = FALSE)
+
+trump2020$text <- tolower(trump2020$text)
+# delete usernames
+trump2020$text <- gsub("@\\w+", "", trump2020$text)
+# delete punctuation
+trump2020$text <- gsub("[[:punct:]]", "", trump2020$text)
+# remove links 
+trump2020$text <- gsub("http\\w+", "", trump2020$text)
+trump2020$text <- gsub('[[:digit:]]+', '', trump2020$text)
+
+trump2020.words <- trump2020 %>% select(user_id, text, screen_name, source) %>% unnest_tokens(word,text)
+
+stop.trump <- stop_words %>% select(-lexicon) %>% bind_rows(data.frame(word = c(stopwords(),"trump")))
+
+trump2020.words <- trump2020.words %>% anti_join(stop.trump)
+
+```
+```{r}
+corp.trump <- Corpus(VectorSource(trump2020.words$word))
+
+tdm.trump <- TermDocumentMatrix(corp.trump)
+
+m.trump <- as.matrix(tdm.trump)
+v.trump <- sort(rowSums(m.trump),decreasing=TRUE)
+d.trump <- data.frame(word=names(v.trump),freq=v.trump)
+head(d.trump, 10)
+
+set.seed(1234)
+wordcloud(words = d.trump$word, freq = d.trump$freq, min.freq = 20,
+          max.words=200, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+```{r}
+set.seed(20170202) 
+ht <- '#trump2020' 
+tweets.raw <- searchTwitter(ht, n = 1000, lang = 'en', since = '2019-01-29')
+
+# remove retweets
+df <- twListToDF(strip_retweets(tweets.raw, strip_manual = TRUE, strip_mt = TRUE))
+df$text <- tolower(df$text)
+# delete usernames
+df$text <- gsub("@\\w+", "", df$text)
+
+# remove links 
+df$text <- gsub("http\\w+", "", df$text)
+
+
+df$url <- paste0('https://twitter.com/', df$screenName, '/status/', df$id)
+df$text <- iconv(df$text, from = "latin1", to = "ascii", 
+                    sub = "byte")
+
+
+emoticons <- read.csv("Decoded Emojis Col Sep.csv", header = T)
+
+library("DataCombine")
+
+emojireplace <- FindReplace(data = df, Var = "text", 
+                            replaceData = emoticons,
+                       from = "R_Encoding", to = "Name", 
+                       exact = FALSE)
+
+library(stringr)
+library("RWeka")
+library("tokenizers")
+
+tokens <- WordTokenizer(df$text)
+tokens <- data.frame(tokens)
+
+emoji.frequency <- matrix(NA, nrow = nrow(tokens), ncol = nrow(emoticons))
+emoji_count <- c()
+for(i in 1:nrow(emoticons)){
+  count = 0 
+  for(j in 1:nrow(tokens)){
+    if(string_contains(tokens[j], emoticons$R_Encoding[i])){
+      count = count + 1 
+    }
+    emoji_count[i] <- count
+  }
+}
+
+emoji.counts <- colSums(emoji.frequency>-1)
+emoticons <- cbind(emoji.counts, emoticons)
+emoticons <- emoticons[,-c(2,3)]
+
+emoticons %>% filter(emoji.counts != 0)
+```
+
